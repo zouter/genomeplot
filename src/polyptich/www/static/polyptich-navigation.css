@@ -101,9 +101,17 @@ body[data-polyptich-navigation-host] {
 }
 
 #pt-global-navigation-shell .pt-global-navigation__heading {
+  min-width: 0;
   margin: 0 0.25rem;
   font-size: 1.05rem;
   font-weight: 700;
+}
+
+#pt-global-navigation-shell .pt-global-navigation__brand-image {
+  display: block;
+  width: min(100%, 13.5rem);
+  height: auto;
+  filter: drop-shadow(0 2px 7px rgba(91, 62, 190, 0.14));
 }
 
 #pt-global-navigation-shell .pt-global-navigation__drawer-close {

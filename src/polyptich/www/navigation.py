@@ -46,6 +46,7 @@ _NODE_KEYS = {
     "icon",
 }
 _COLLECTION_KEYS = {"type", "path", "href", "placeholder", "favorites"}
+_BRAND_KEYS = {"label", "asset"}
 _HIDDEN_NAMES = {"assets", ".assets", "manifest.json", "navigation.json"}
 
 
@@ -126,6 +127,7 @@ def load_navigation(base_dir, manifests):
         "schema": SCHEMA,
         "schema_version": SCHEMA_VERSION,
         "title": declaration["title"],
+        "brand": declaration.get("brand"),
         "items": items,
         "nodes": ids,
     }
@@ -142,12 +144,18 @@ def serialize_navigation(navigation, *, can_access, collection_href, script_root
         )
         if serialized is not None:
             items.append(serialized)
-    return {
+    payload = {
         "schema": SCHEMA,
         "schema_version": SCHEMA_VERSION,
         "title": navigation["title"],
         "items": items,
     }
+    if navigation.get("brand"):
+        payload["brand"] = {
+            **navigation["brand"],
+            "asset": prefix_local_url(navigation["brand"]["asset"], script_root),
+        }
+    return payload
 
 
 def serialize_service_restart_action(control, *, health_url, script_root=""):
@@ -198,15 +206,27 @@ def directory_has_navigation_content(path, *, can_access=lambda _path: True):
 
 
 def _validate_declaration(value, path):
-    allowed = {"schema", "schema_version", "title", "items"}
-    if set(value) != allowed:
-        raise ValueError(f"{path} must contain exactly schema, schema_version, title, and items")
+    required = {"schema", "schema_version", "title", "items"}
+    if not required.issubset(value) or not set(value).issubset({*required, "brand"}):
+        raise ValueError(f"{path} contains malformed navigation metadata")
     if value.get("schema") != SCHEMA or value.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"{path} must use {SCHEMA} schema_version {SCHEMA_VERSION}")
     if not isinstance(value.get("title"), str) or not value["title"].strip():
         raise ValueError(f"{path} title must be a non-empty string")
     if not isinstance(value.get("items"), list):
         raise ValueError(f"{path} items must be a list")
+    brand = value.get("brand")
+    if brand is not None and (
+        not isinstance(brand, dict)
+        or set(brand) != _BRAND_KEYS
+        or not isinstance(brand.get("label"), str)
+        or not brand["label"].strip()
+        or not isinstance(brand.get("asset"), str)
+        or not brand["asset"].startswith("/")
+        or brand["asset"].startswith("//")
+        or "\0" in brand["asset"]
+    ):
+        raise ValueError(f"{path} brand must declare a label and local asset URL")
 
 
 def _validate_node(

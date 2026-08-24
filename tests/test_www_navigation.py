@@ -183,6 +183,7 @@ def test_directory_collection_favorites_search_paging_and_scope_filtering(tmp_pa
                 "schema": "polyptich.www.navigation",
                 "schema_version": 1,
                 "title": "Iomix",
+                "brand": {"label": "InstantOmics", "asset": "/files/assets/instantomics.svg"},
                 "items": [
                     {
                         "id": "tasks",
@@ -224,11 +225,21 @@ def test_directory_collection_favorites_search_paging_and_scope_filtering(tmp_pa
 
     skeleton = client.get("/api/v1/navigation", headers=auth()).get_json()
     assert skeleton["schema"] == "polyptich.www.navigation"
+    assert skeleton["brand"] == {
+        "label": "InstantOmics",
+        "asset": "/files/assets/instantomics.svg",
+    }
     assert [item["id"] for item in skeleton["items"]] == ["tasks"]
     assert skeleton["items"][0]["icon"] == "tasks"
     assert skeleton["items"][0]["active"] is True
     collection_href = skeleton["items"][0]["collection"]["href"]
     assert client.get("/api/v1/navigation", headers=auth()).headers["Cache-Control"] == "no-store"
+    prefixed_tree = client.get(
+        "/api/v1/navigation",
+        headers=auth(),
+        environ_overrides={"SCRIPT_NAME": "/gateway"},
+    ).get_json()
+    assert prefixed_tree["brand"]["asset"] == "/gateway/files/assets/instantomics.svg"
 
     first = client.get(collection_href + "?q=a&page=1&page_size=1", headers=auth()).get_json()
     second = client.get(collection_href + "?q=a&page=2&page_size=1", headers=auth()).get_json()
@@ -295,6 +306,25 @@ def test_navigation_rejects_non_allowlisted_icons(tmp_path, icon):
     )
 
     with pytest.raises(ValueError, match="invalid icon"):
+        create_app(tmp_path, access_verifier=FakeVerifier())
+
+
+def test_navigation_rejects_remote_brand_asset(tmp_path):
+    www = tmp_path / "www"
+    www.mkdir()
+    (www / "navigation.json").write_text(
+        json.dumps(
+            {
+                "schema": "polyptich.www.navigation",
+                "schema_version": 1,
+                "title": "InstantOmics",
+                "brand": {"label": "InstantOmics", "asset": "https://example.test/logo.svg"},
+                "items": [],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="local asset URL"):
         create_app(tmp_path, access_verifier=FakeVerifier())
 
 

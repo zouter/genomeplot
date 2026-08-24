@@ -1191,18 +1191,39 @@
     actionsRoot.hidden = rendered.length === 0;
   };
 
+  const validateBrand = (brand) => brand === undefined || (
+    brand && typeof brand === "object"
+    && Object.keys(brand).length === 2
+    && typeof brand.label === "string" && brand.label.trim()
+    && typeof brand.asset === "string" && isLocalUrl(brand.asset)
+  );
+
+  const renderBrand = (payload) => {
+    if (!payload.brand) {
+      title.textContent = payload.title || "Navigation";
+      return;
+    }
+    const image = document.createElement("img");
+    image.className = "pt-global-navigation__brand-image";
+    image.src = payload.brand.asset;
+    image.alt = payload.brand.label;
+    image.decoding = "async";
+    title.replaceChildren(image);
+  };
+
   fetch(shell.dataset.navigationUrl, {headers: {Accept: "application/json"}})
     .then((response) => {
       if (!response.ok) throw new Error(`Navigation request failed (${response.status})`);
       return response.json();
     })
     .then((payload) => {
-      title.textContent = payload.title || "Navigation";
       if (payload?.schema !== "polyptich.www.navigation" || payload.schema_version !== 1
         || !Array.isArray(payload.items)
-        || !payload.items.every((item) => validateNavigationNode(item))) {
+        || !payload.items.every((item) => validateNavigationNode(item))
+        || !validateBrand(payload.brand)) {
         throw new Error("Navigation returned an invalid response");
       }
+      renderBrand(payload);
       navigationItems = payload.items;
       preferredNavigationAvailable = Boolean(
         pageContext.navigation_id && containsNavigationId(navigationItems, pageContext.navigation_id)
