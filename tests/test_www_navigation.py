@@ -189,6 +189,7 @@ def test_directory_collection_favorites_search_paging_and_scope_filtering(tmp_pa
                         "label": "Tasks",
                         "type": "collection",
                         "icon": "tasks",
+                        "active": True,
                         "href": "/files/tasks/",
                         "collection": {
                             "type": "directory",
@@ -225,6 +226,7 @@ def test_directory_collection_favorites_search_paging_and_scope_filtering(tmp_pa
     assert skeleton["schema"] == "polyptich.www.navigation"
     assert [item["id"] for item in skeleton["items"]] == ["tasks"]
     assert skeleton["items"][0]["icon"] == "tasks"
+    assert skeleton["items"][0]["active"] is True
     collection_href = skeleton["items"][0]["collection"]["href"]
     assert client.get("/api/v1/navigation", headers=auth()).headers["Cache-Control"] == "no-store"
 

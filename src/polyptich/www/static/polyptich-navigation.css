@@ -230,6 +230,16 @@ body[data-polyptich-navigation-host] {
   font-weight: 700;
 }
 
+#pt-global-navigation-shell .pt-global-navigation__activity {
+  flex: 0 0 0.5rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin: 0 0.45rem 0 0.2rem;
+  border-radius: 50%;
+  background: #dc2626;
+  box-shadow: 0 0 0.32rem #dc2626, 0 0 0.7rem rgb(220 38 38 / 72%);
+}
+
 #pt-global-navigation-shell .pt-global-navigation__favorite .pt-global-navigation__link::after {
   content: "★";
   margin-left: 0.35rem;

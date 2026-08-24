@@ -388,13 +388,14 @@
   const validateNavigationNode = (item, depth = 0) => {
     if (!item || typeof item !== "object" || depth > 32) return false;
     if (!Object.keys(item).every((key) => [
-      "id", "label", "type", "href", "children", "favorite", "collection", "icon",
+      "id", "label", "type", "href", "children", "favorite", "active", "collection", "icon",
     ].includes(key))) return false;
     if (typeof item.id !== "string" || !/^[A-Za-z][A-Za-z0-9_.:-]*$/.test(item.id)) return false;
     if (typeof item.label !== "string" || !item.label.trim() || item.label.length > 200) return false;
     if (!["section", "page", "collection"].includes(item.type)) return false;
     if ("icon" in item && !navigationIcons.has(item.icon)) return false;
     if ("favorite" in item && typeof item.favorite !== "boolean") return false;
+    if ("active" in item && typeof item.active !== "boolean") return false;
     if ("href" in item && !isLocalUrl(item.href)) return false;
     if (item.type === "page" && !isLocalUrl(item.href)) return false;
     if ((item.type === "collection") !== ("collection" in item)) return false;
@@ -516,17 +517,21 @@
     const renderPayload = (payload) => {
       const allItems = [...payload.favorites, ...payload.items];
       const serverFavoriteIds = new Set(payload.favorites.map((item) => item.id));
+      const activeItems = allItems.filter((item) => item.active);
+      const activeIds = new Set(activeItems.map((item) => item.id));
       const favoriteItems = allItems
-        .filter((item) => isFavorite(item))
+        .filter((item) => !activeIds.has(item.id) && isFavorite(item))
         .map((item) => ({...item, favorite: true}));
       const ordinaryItems = allItems
-        .filter((item) => !isFavorite(item))
+        .filter((item) => !activeIds.has(item.id) && !isFavorite(item))
         .filter((item) => !serverFavoriteIds.has(item.id) || !query || item.label.toLowerCase().includes(query.toLowerCase()))
         .map((item) => ({...item, favorite: false}));
-      favorites.replaceChildren(...renderNodes(favoriteItems, 1).children);
+      favorites.replaceChildren(...renderNodes([...activeItems, ...favoriteItems], 1).children);
       results.replaceChildren(...renderNodes(ordinaryItems, 1).children);
       host.querySelectorAll("a.pt-global-navigation__link").forEach((link) => {
-        link.title = "Double-click to add or remove a favorite";
+        if (!link.closest(".pt-global-navigation__active")) {
+          link.title = "Double-click to add or remove a favorite";
+        }
       });
       return ordinaryItems;
     };
@@ -534,7 +539,7 @@
     const toggleFavorite = (id) => {
       if (!currentPayload) return;
       const item = [...currentPayload.favorites, ...currentPayload.items].find((candidate) => candidate.id === id);
-      if (!item) return;
+      if (!item || item.active) return;
       const nextValue = !isFavorite(item);
       if (nextValue === Boolean(item.favorite)) delete favoriteOverrides[id];
       else favoriteOverrides[id] = nextValue;
@@ -645,6 +650,7 @@
     ordered.forEach((item) => {
       const li = document.createElement("li");
       if (item.favorite) li.classList.add("pt-global-navigation__favorite");
+      if (item.active) li.classList.add("pt-global-navigation__active");
       const row = document.createElement("div");
       row.className = "pt-global-navigation__row";
       const expandable = (Array.isArray(item.children) && item.children.length > 0) || item.collection;
@@ -695,6 +701,13 @@
         destination.textContent = item.label;
       }
       row.append(destination);
+      if (item.active) {
+        const activity = document.createElement("span");
+        activity.className = "pt-global-navigation__activity";
+        activity.setAttribute("aria-label", "Active");
+        activity.title = "Active";
+        row.append(activity);
+      }
       li.append(row);
       if (panel) {
         let collection = null;

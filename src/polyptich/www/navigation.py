@@ -34,7 +34,17 @@ NAVIGATION_ICONS = frozenset(
         "release",
     }
 )
-_NODE_KEYS = {"id", "label", "type", "href", "children", "favorite", "collection", "icon"}
+_NODE_KEYS = {
+    "id",
+    "label",
+    "type",
+    "href",
+    "children",
+    "favorite",
+    "active",
+    "collection",
+    "icon",
+}
 _COLLECTION_KEYS = {"type", "path", "href", "placeholder", "favorites"}
 _HIDDEN_NAMES = {"assets", ".assets", "manifest.json", "navigation.json"}
 
@@ -225,6 +235,9 @@ def _validate_node(
     favorite = value.get("favorite", False)
     if type(favorite) is not bool:
         raise ValueError(f"Navigation node {node_id!r} favorite must be a boolean")
+    active = value.get("active", False)
+    if type(active) is not bool:
+        raise ValueError(f"Navigation node {node_id!r} active must be a boolean")
     icon = value.get("icon")
     if "icon" in value and icon not in NAVIGATION_ICONS:
         raise ValueError(f"Navigation node {node_id!r} has an invalid icon")
@@ -250,6 +263,8 @@ def _validate_node(
         node["href"] = href
     if favorite:
         node["favorite"] = True
+    if active:
+        node["active"] = True
     if "icon" in value:
         node["icon"] = icon
     if collection is not None:
@@ -380,6 +395,8 @@ def _serialize_node(node, *, can_access, collection_href, script_root):
         result["href"] = prefix_local_url(node["href"], script_root)
     if node.get("favorite"):
         result["favorite"] = True
+    if node.get("active"):
+        result["active"] = True
     if children:
         result["children"] = children
     collection = node.get("collection")
