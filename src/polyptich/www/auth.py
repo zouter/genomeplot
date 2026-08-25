@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from flask import abort, g
 
 DASHBOARD_READ = "dashboard.read"
+DASHBOARD_CONTROL = "dashboard.control"
 AGENT_READ = "agent.read"
 PRIVATE_READ = "private.read"
 AGENT_CONTROL = "agent.control"
@@ -136,7 +137,7 @@ def scopes_for_email(email, *, trusted_viewer_emails=(), operator_emails=()):
     if normalized in trusted or normalized in operators:
         scopes.add(PRIVATE_READ)
     if normalized in operators:
-        scopes.update({AGENT_CONTROL, SERVICE_RESTART})
+        scopes.update({DASHBOARD_CONTROL, AGENT_CONTROL, SERVICE_RESTART})
     return frozenset(scopes)
 
 
