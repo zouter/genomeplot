@@ -20,6 +20,7 @@ def render_workspace_document(
     *,
     navigation_id=None,
     stylesheets=(),
+    favicon_url=None,
     head_html="",
     body_end_html="",
     toc=True,
@@ -46,6 +47,11 @@ def render_workspace_document(
 
     title_text = str(title)
     title_html = escape(title_text)
+    favicon_html = (
+        f'  <link rel="icon" href="{escape(str(favicon_url), quote=True)}" type="image/svg+xml">\n'
+        if favicon_url is not None
+        else ""
+    )
     main_class_attr = (
         f' class="{escape(str(main_class), quote=True)}"' if main_class is not None else ""
     )
@@ -84,7 +90,7 @@ def render_workspace_document(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{title_html}</title>
-{persistent_stylesheet_html}
+{favicon_html}{persistent_stylesheet_html}
 {stylesheet_html}{head_html}
 </head>
 <body data-polyptich-navigation-host data-polyptich-page-version="{PAGE_PROTOCOL_VERSION}">
@@ -148,6 +154,7 @@ def render_workspace_page(
     *,
     navigation_id=None,
     stylesheets=(),
+    favicon_url=None,
     head_html="",
     body_end_html="",
     toc=True,
@@ -159,6 +166,7 @@ def render_workspace_page(
         content_html,
         navigation_id=navigation_id,
         stylesheets=stylesheets,
+        favicon_url=favicon_url,
         head_html=head_html,
         body_end_html=body_end_html,
         toc=toc,
@@ -189,6 +197,7 @@ def render_workspace_app(
     bootstrap_id="pt-app-bootstrap",
     stylesheets=(),
     module_scripts=(),
+    favicon_url=None,
     navigation_id=None,
     toc=False,
     main_class=None,
@@ -222,6 +231,7 @@ def render_workspace_app(
         content,
         navigation_id=navigation_id,
         stylesheets=stylesheets,
+        favicon_url=favicon_url,
         body_end_html=scripts,
         toc=toc,
         main_class=main_class,
