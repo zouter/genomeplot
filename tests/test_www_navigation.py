@@ -203,6 +203,7 @@ def test_directory_collection_favorites_search_paging_and_scope_filtering(tmp_pa
                         "id": "restricted",
                         "label": "Restricted",
                         "type": "section",
+                        "required_scope": "private.read",
                         "children": [
                             {
                                 "id": "private-task",
@@ -279,6 +280,38 @@ def test_directory_collection_favorites_search_paging_and_scope_filtering(tmp_pa
 
     viewer_tree = client.get("/api/v1/navigation", headers=auth("viewer@example.test")).get_json()
     assert [item["id"] for item in viewer_tree["items"]] == ["tasks", "restricted"]
+    assert app.config["POLYPTICH_WWW_NAVIGATION"]["nodes"]["private-task"]["_scope"] == (
+        "private.read"
+    )
+
+
+@pytest.mark.parametrize(
+    "required_scope", [None, "", " private.read", "private read", "<private>", 3, []]
+)
+def test_navigation_rejects_malformed_required_scopes(tmp_path, required_scope):
+    www = tmp_path / "www"
+    www.mkdir()
+    (www / "navigation.json").write_text(
+        json.dumps(
+            {
+                "schema": "polyptich.www.navigation",
+                "schema_version": 1,
+                "title": "Iomix",
+                "items": [
+                    {
+                        "id": "private",
+                        "label": "Private",
+                        "type": "page",
+                        "href": "/browse/private",
+                        "required_scope": required_scope,
+                    }
+                ],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="required_scope"):
+        create_app(tmp_path, access_verifier=FakeVerifier())
 
 
 @pytest.mark.parametrize(
@@ -435,6 +468,12 @@ def test_mobile_drawer_and_shared_preference_contracts_are_present():
         assert selector in navigation_script
     assert 'document.body.style.setProperty("position", "fixed", "important")' in navigation_script
     assert "window.scrollTo(state.x, state.y)" in navigation_script
+    assert 'favoriteToggle.type = "button"' in navigation_script
+    assert 'favoriteToggle.setAttribute("aria-pressed"' in navigation_script
+    assert "options.onToggleFavorite(item.id)" in navigation_script
+    assert "pendingNavigation" not in navigation_script
+    assert "Double-click" not in navigation_script
+    assert "pt-global-navigation__icon-toggle" not in navigation_script
     assert ".pt-global-navigation__drawer-close" in navigation_css
     assert "@media (prefers-reduced-motion: reduce)" in navigation_css
 

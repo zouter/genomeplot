@@ -448,7 +448,6 @@
     const favoriteStorageKey = `polyptichNavigationFavorites:${new URL(config.href, window.location.href).pathname}`;
     let favoriteOverrides = {};
     let currentPayload = null;
-    let pendingNavigation = null;
 
     try {
       const stored = JSON.parse(window.localStorage.getItem(favoriteStorageKey) || "{}");
@@ -517,7 +516,9 @@
     const renderPayload = (payload) => {
       const allItems = [...payload.favorites, ...payload.items];
       const serverFavoriteIds = new Set(payload.favorites.map((item) => item.id));
-      const activeItems = allItems.filter((item) => item.active);
+      const activeItems = allItems
+        .filter((item) => item.active)
+        .map((item) => ({...item, favorite: isFavorite(item)}));
       const activeIds = new Set(activeItems.map((item) => item.id));
       const favoriteItems = allItems
         .filter((item) => !activeIds.has(item.id) && isFavorite(item))
@@ -526,20 +527,16 @@
         .filter((item) => !activeIds.has(item.id) && !isFavorite(item))
         .filter((item) => !serverFavoriteIds.has(item.id) || !query || item.label.toLowerCase().includes(query.toLowerCase()))
         .map((item) => ({...item, favorite: false}));
-      favorites.replaceChildren(...renderNodes([...activeItems, ...favoriteItems], 1).children);
-      results.replaceChildren(...renderNodes(ordinaryItems, 1).children);
-      host.querySelectorAll("a.pt-global-navigation__link").forEach((link) => {
-        if (!link.closest(".pt-global-navigation__active")) {
-          link.title = "Double-click to add or remove a favorite";
-        }
-      });
+      const renderOptions = {onToggleFavorite: toggleFavorite};
+      favorites.replaceChildren(...renderNodes([...activeItems, ...favoriteItems], 1, renderOptions).children);
+      results.replaceChildren(...renderNodes(ordinaryItems, 1, renderOptions).children);
       return ordinaryItems;
     };
 
     const toggleFavorite = (id) => {
       if (!currentPayload) return;
       const item = [...currentPayload.favorites, ...currentPayload.items].find((candidate) => candidate.id === id);
-      if (!item || item.active) return;
+      if (!item) return;
       const nextValue = !isFavorite(item);
       if (nextValue === Boolean(item.favorite)) delete favoriteOverrides[id];
       else favoriteOverrides[id] = nextValue;
@@ -550,29 +547,6 @@
       }
       renderPayload(currentPayload);
     };
-
-    host.addEventListener("click", (event) => {
-      const link = event.target.closest?.("a.pt-global-navigation__link");
-      if (!link || !host.contains(link) || event.detail === 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      if (pendingNavigation) {
-        window.clearTimeout(pendingNavigation.timer);
-        const previous = pendingNavigation.link;
-        pendingNavigation = null;
-        event.preventDefault();
-        if (previous === link) {
-          toggleFavorite(link.dataset.navigationId);
-          return;
-        }
-        window.polyptichNavigate(previous.href);
-      }
-      event.preventDefault();
-      const timer = window.setTimeout(() => {
-        if (!pendingNavigation || pendingNavigation.link !== link) return;
-        pendingNavigation = null;
-        window.polyptichNavigate(link.href);
-      }, 250);
-      pendingNavigation = {link, timer};
-    });
 
     const requestPage = async (requestedPage) => {
       if (controller) controller.abort();
@@ -627,6 +601,7 @@
       if (!ready && !controller) requestPage(1);
     };
     host._ptEnsureCollectionLoaded = ensureLoaded;
+    host._ptRefreshCollection = () => requestPage(page);
 
     if (input) {
       input.addEventListener("input", () => {
@@ -643,7 +618,7 @@
     ensureLoaded();
   };
 
-  const renderNodes = (items, depth = 0) => {
+  const renderNodes = (items, depth = 0, options = {}) => {
     const ul = document.createElement("ul");
     ul.className = `pt-global-navigation__level pt-global-navigation__level--${Math.min(depth, 6)}`;
     const ordered = [...items].sort((left, right) => Number(Boolean(right.favorite)) - Number(Boolean(left.favorite)));
@@ -674,19 +649,7 @@
         row.append(spacer);
       }
       const icon = makeIcon(item.icon);
-      if (icon) {
-        if (expandable) {
-          const iconToggle = document.createElement("button");
-          iconToggle.className = "pt-global-navigation__icon-toggle";
-          iconToggle.type = "button";
-          iconToggle.setAttribute("aria-label", `Expand ${item.label}`);
-          iconToggle.append(icon);
-          row.append(iconToggle);
-          icon._ptToggle = iconToggle;
-        } else {
-          row.append(icon);
-        }
-      }
+      if (icon) row.append(icon);
       let destination = null;
       if (item.href) {
         destination = document.createElement("a");
@@ -701,6 +664,20 @@
         destination.textContent = item.label;
       }
       row.append(destination);
+      if (options.onToggleFavorite) {
+        const favoriteToggle = document.createElement("button");
+        favoriteToggle.className = "pt-global-navigation__favorite-toggle";
+        favoriteToggle.type = "button";
+        favoriteToggle.setAttribute("aria-pressed", String(Boolean(item.favorite)));
+        favoriteToggle.setAttribute(
+          "aria-label",
+          `${item.favorite ? "Remove" : "Add"} ${item.label} ${item.favorite ? "from" : "to"} favorites`,
+        );
+        favoriteToggle.title = item.favorite ? "Remove from favorites" : "Add to favorites";
+        favoriteToggle.textContent = item.favorite ? "★" : "☆";
+        favoriteToggle.addEventListener("click", () => options.onToggleFavorite(item.id));
+        row.append(favoriteToggle);
+      }
       if (item.active) {
         const activity = document.createElement("span");
         activity.className = "pt-global-navigation__activity";
@@ -712,7 +689,7 @@
       if (panel) {
         let collection = null;
         if (Array.isArray(item.children) && item.children.length) {
-          panel.append(renderNodes(item.children, depth + 1));
+          panel.append(renderNodes(item.children, depth + 1, options));
         }
         if (item.collection) {
           collection = document.createElement("div");
@@ -722,17 +699,10 @@
         const setExpanded = (expanded) => {
           disclosure.setAttribute("aria-expanded", String(expanded));
           disclosure.setAttribute("aria-label", `${expanded ? "Collapse" : "Expand"} ${item.label}`);
-          if (icon?._ptToggle) {
-            icon._ptToggle.setAttribute("aria-expanded", String(expanded));
-            icon._ptToggle.setAttribute("aria-label", `${expanded ? "Collapse" : "Expand"} ${item.label}`);
-          }
           panel.hidden = !expanded;
           if (expanded && collection) renderCollection(collection, item.collection);
         };
         disclosure.addEventListener("click", () => setExpanded(disclosure.getAttribute("aria-expanded") !== "true"));
-        if (icon?._ptToggle) {
-          icon._ptToggle.addEventListener("click", () => setExpanded(disclosure.getAttribute("aria-expanded") !== "true"));
-        }
         if (destination.getAttribute && destination.getAttribute("aria-current") === "page") {
           setExpanded(true);
         }
@@ -1013,6 +983,9 @@
       if (historyMode === "push") history.pushState(pageState(finalUrl, 0, 0), "", finalUrl);
       else if (historyMode === "replace") history.replaceState(pageState(finalUrl, 0, 0), "", finalUrl);
       applyActiveNavigation();
+      document.querySelectorAll(".pt-global-navigation__collection").forEach((collection) => {
+        if (collection._ptRefreshCollection) collection._ptRefreshCollection();
+      });
       renderToc();
       if (openDrawerName) closeDrawer();
       restorePosition(finalUrl, scrollPosition);

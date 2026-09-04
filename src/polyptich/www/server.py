@@ -40,6 +40,8 @@ from .navigation import (
     COLLECTION_SCHEMA,
     COLLECTION_SCHEMA_VERSION,
     directory_has_navigation_content,
+    endpoint_mount_url,
+    endpoint_mount_urls,
     is_hidden_name,
     load_navigation,
     serialize_navigation,
@@ -78,7 +80,8 @@ def create_app(
     external_origin = _validate_external_origin(external_origin)
     home_url = _validate_home_url(home_url)
     manifests = _read_initial_manifests(base_dir)
-    navigation = load_navigation(base_dir, manifests)
+    endpoint_mounts = endpoint_mount_urls(base_dir, manifests)
+    navigation = load_navigation(base_dir, manifests, endpoint_mounts=endpoint_mounts)
 
     app = Flask(__name__, static_folder=None)
     if trusted_proxy:
@@ -199,7 +202,7 @@ def create_app(
             return render_report(subpath)
         endpoint = endpoint_manifest(current)
         if endpoint is not None and request.args.get("browse") != "1":
-            return redirect(_request_local_url(_endpoint_href(subpath)))
+            return redirect(_request_local_url(endpoint_mount_url(subpath, endpoint)))
 
         items = []
         for path in sorted(current.iterdir(), key=_sort_key):
@@ -466,7 +469,7 @@ def create_app(
         return render_template("404.html", path=request.path, root_href=url_for("browse")), 404
 
     factories = _discover_endpoint_factories(endpoint_factories)
-    _register_endpoint_manifests(app, base_dir, manifests, factories)
+    _register_endpoint_manifests(app, base_dir, manifests, factories, endpoint_mounts)
     return app
 
 
@@ -556,7 +559,7 @@ def _discover_endpoint_factories(explicit):
     return factories
 
 
-def _register_endpoint_manifests(app, base_dir, manifests, factories):
+def _register_endpoint_manifests(app, base_dir, manifests, factories, endpoint_mounts):
     endpoint_index = 0
     for manifest_path, manifest in manifests.items():
         if manifest.get("schema") != ENDPOINT_SCHEMA:
@@ -583,15 +586,46 @@ def _register_endpoint_manifests(app, base_dir, manifests, factories):
         rel = path.relative_to(base_dir).as_posix()
         endpoint_index += 1
         endpoint_name = f"polyptich_www_endpoint_{endpoint_index}"
-        mount_url = _endpoint_href(rel).rstrip("/")
+        mount_url = endpoint_mounts[manifest_path].rstrip("/")
         scope = _required_scope(base_dir, path)
         app.config["POLYPTICH_WWW_ENDPOINT_SCOPES"][endpoint_name] = (mount_url, scope)
         endpoint = factory(path=path, mount_path=rel, manifest=manifest)
         endpoint.register(app, mount_url=mount_url, endpoint_name=endpoint_name)
+        legacy_mount = f"/endpoint/{rel.strip('/')}"
+        if mount_url != legacy_mount:
+            _register_legacy_endpoint_redirect(app, endpoint_name, legacy_mount, mount_url)
+
+
+def _register_legacy_endpoint_redirect(app, endpoint_name, legacy_mount, mount_url):
+    def dispatch(subpath=""):
+        target = f"{request.script_root.rstrip('/')}{mount_url}/{subpath}"
+        if request.query_string:
+            target += f"?{request.query_string.decode('latin-1')}"
+        return redirect(target, code=308)
+
+    app.add_url_rule(
+        legacy_mount,
+        endpoint_name + "_legacy_redirect",
+        dispatch,
+        defaults={"subpath": ""},
+    )
+    app.add_url_rule(
+        legacy_mount + "/",
+        endpoint_name + "_legacy_redirect_slash",
+        dispatch,
+        defaults={"subpath": ""},
+    )
+    app.add_url_rule(
+        legacy_mount + "/<path:subpath>",
+        endpoint_name + "_legacy_redirect_path",
+        dispatch,
+    )
 
 
 def _endpoint_scope_for_request(endpoint_scopes, request_path, endpoint_name):
-    for name, (prefix, scope) in endpoint_scopes.items():
+    for name, (prefix, scope) in sorted(
+        endpoint_scopes.items(), key=lambda item: len(item[1][0]), reverse=True
+    ):
         if endpoint_name and (endpoint_name == name or endpoint_name.startswith(name + "_")):
             return scope
         if request_path == prefix or request_path.startswith(prefix + "/"):
@@ -704,17 +738,13 @@ def _item_href(rel, manifest, endpoint, is_dir, path=None):
     if manifest is not None:
         return url_for("render_report", subpath=rel.rstrip("/") + "/")
     if endpoint is not None:
-        return _request_local_url(_endpoint_href(rel))
+        return _request_local_url(endpoint_mount_url(rel, endpoint))
     if is_dir:
         index = _directory_index(path) if path is not None else None
         if index is not None:
             return url_for("download", filename=rel.rstrip("/") + "/")
         return url_for("browse", subpath=rel)
     return url_for("download", filename=rel)
-
-
-def _endpoint_href(rel):
-    return "/endpoint/" + rel.strip("/") + "/"
 
 
 def _request_local_url(value):
@@ -753,7 +783,7 @@ def _directory_navigation_item(
             except ValueError:
                 value = {}
             if value.get("schema") == ENDPOINT_SCHEMA:
-                endpoint = _request_local_url(_endpoint_href(relative))
+                endpoint = _request_local_url(endpoint_mount_url(relative, value))
         index = _directory_index(path)
         if endpoint is not None:
             href = endpoint

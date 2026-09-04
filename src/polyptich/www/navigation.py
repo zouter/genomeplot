@@ -11,6 +11,7 @@ COLLECTION_SCHEMA = "polyptich.www.navigation.collection"
 COLLECTION_SCHEMA_VERSION = 1
 
 _NODE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]*$")
+_SCOPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 NAVIGATION_ICONS = frozenset(
     {
         "home",
@@ -44,13 +45,67 @@ _NODE_KEYS = {
     "active",
     "collection",
     "icon",
+    "required_scope",
 }
 _COLLECTION_KEYS = {"type", "path", "href", "placeholder", "favorites"}
 _BRAND_KEYS = {"label", "asset"}
 _HIDDEN_NAMES = {"assets", ".assets", "manifest.json", "navigation.json"}
+_MOUNT_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~-]*$")
+_RESERVED_MOUNT_ROOTS = frozenset(
+    {
+        "api",
+        "browse",
+        "endpoint",
+        "files",
+        "healthz",
+        "readyz",
+        "report",
+        "report-data",
+        "report-download",
+        "static",
+    }
+)
 
 
-def load_navigation(base_dir, manifests):
+def endpoint_mount_urls(base_dir, manifests):
+    """Resolve endpoint mount URLs and reject custom mount collisions."""
+    mounts = {}
+    custom = set()
+    for manifest_path, manifest in manifests.items():
+        if manifest.get("schema") != "polyptich.www.endpoint":
+            continue
+        relative = manifest_path.parent.relative_to(base_dir).as_posix()
+        if "mount_url" in manifest:
+            mount = _validate_mount_url(manifest["mount_url"], manifest_path)
+            custom.add(manifest_path)
+        else:
+            mount = "/endpoint/" + relative.strip("/") + "/"
+        mounts[manifest_path] = mount
+
+    entries = list(mounts.items())
+    for index, (left_path, left_mount) in enumerate(entries):
+        for right_path, right_mount in entries[index + 1 :]:
+            overlap = (
+                left_mount == right_mount
+                or left_mount.startswith(right_mount)
+                or right_mount.startswith(left_mount)
+            )
+            if overlap and (left_path in custom or right_path in custom):
+                raise ValueError(
+                    f"Endpoint mounts conflict: {left_mount!r} ({left_path}) and "
+                    f"{right_mount!r} ({right_path})"
+                )
+    return mounts
+
+
+def endpoint_mount_url(relative_path, manifest):
+    """Return one endpoint's canonical public mount URL."""
+    if "mount_url" in manifest:
+        return _validate_mount_url(manifest["mount_url"], "Endpoint manifest")
+    return "/endpoint/" + relative_path.strip("/") + "/"
+
+
+def load_navigation(base_dir, manifests, *, endpoint_mounts=None):
     """Load, validate, and assemble the global declaration and endpoint contributions."""
     navigation_path = base_dir / "navigation.json"
     if navigation_path.exists():
@@ -64,6 +119,7 @@ def load_navigation(base_dir, manifests):
             "items": [],
         }
 
+    endpoint_mounts = endpoint_mounts or endpoint_mount_urls(base_dir, manifests)
     ids = {}
     items = [
         _validate_node(item, navigation_path, ids, base_dir=base_dir, mount_url=None, scope=None)
@@ -88,8 +144,7 @@ def load_navigation(base_dir, manifests):
         if not isinstance(contributed, list):
             raise ValueError(f"{manifest_path} navigation items must be a list")
         endpoint_path = manifest_path.parent
-        mount = endpoint_path.relative_to(base_dir).as_posix()
-        mount_url = "/endpoint/" + mount.strip("/") + "/"
+        mount_url = endpoint_mounts[manifest_path]
         scope = _required_scope_value(base_dir, endpoint_path)
         nodes = [
             _validate_node(
@@ -119,7 +174,7 @@ def load_navigation(base_dir, manifests):
     for manifest_path, manifest in manifests.items():
         if manifest.get("schema") == "polyptich.www.endpoint":
             path = manifest_path.parent
-            endpoint_paths.append(("/endpoint/" + path.relative_to(base_dir).as_posix(), path))
+            endpoint_paths.append((endpoint_mounts[manifest_path].rstrip("/"), path))
     for node in items:
         _assign_paths(node, base_dir, endpoint_paths)
 
@@ -258,6 +313,11 @@ def _validate_node(
     active = value.get("active", False)
     if type(active) is not bool:
         raise ValueError(f"Navigation node {node_id!r} active must be a boolean")
+    node_scope = scope
+    if "required_scope" in value:
+        node_scope = value["required_scope"]
+        if not isinstance(node_scope, str) or not _SCOPE.fullmatch(node_scope):
+            raise ValueError(f"Navigation node {node_id!r} required_scope is invalid")
     icon = value.get("icon")
     if "icon" in value and icon not in NAVIGATION_ICONS:
         raise ValueError(f"Navigation node {node_id!r} has an invalid icon")
@@ -289,8 +349,8 @@ def _validate_node(
         node["icon"] = icon
     if collection is not None:
         node["collection"] = collection
-    if scope is not None:
-        node["_scope"] = scope
+    if node_scope is not None:
+        node["_scope"] = node_scope
     if inherited_path is not None:
         node["_contributor_path"] = inherited_path
     node["children"] = [
@@ -300,7 +360,7 @@ def _validate_node(
             ids,
             base_dir=base_dir,
             mount_url=mount_url,
-            scope=scope,
+            scope=node_scope,
             inherited_path=inherited_path,
         )
         for child in children
@@ -350,10 +410,6 @@ def _validate_collection(value, node_id, source, *, base_dir, mount_url):
         if set(value) - {"type", "href", "placeholder"}:
             raise ValueError(f"Navigation collection {node_id!r} has invalid endpoint options")
         href = _normalize_href(value.get("href"), mount_url=mount_url)
-        if mount_url is None and not urlsplit(href).path.startswith("/endpoint/"):
-            raise ValueError(
-                f"Navigation collection {node_id!r} must use a local endpoint href"
-            )
         collection = {
             "type": "endpoint",
             "href": href,
@@ -406,7 +462,7 @@ def _serialize_node(node, *, can_access, collection_href, script_root):
         )
         if serialized is not None:
             children.append(serialized)
-    if node["type"] == "section" and node.get("children") and not children:
+    if node["type"] == "section" and not children:
         return None
     result = {key: node[key] for key in ("id", "label", "type")}
     if "icon" in node:
@@ -440,6 +496,31 @@ def prefix_local_url(value, script_root):
     if value == script_root or value.startswith(script_root + "/"):
         return value
     return script_root.rstrip("/") + value
+
+
+def _validate_mount_url(value, source):
+    message = f"{source} mount_url must be a canonical local absolute URL"
+    if (
+        not isinstance(value, str)
+        or len(value) > 2048
+        or not value.startswith("/")
+        or value.startswith("//")
+        or not value.endswith("/")
+        or value == "/"
+        or "\\" in value
+        or "%" in value
+        or any(ord(character) < 32 for character in value)
+    ):
+        raise ValueError(message)
+    parsed = urlsplit(value)
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment or parsed.path != value:
+        raise ValueError(message)
+    segments = value[1:-1].split("/")
+    if any(not _MOUNT_SEGMENT.fullmatch(segment) or segment in {".", ".."} for segment in segments):
+        raise ValueError(message)
+    if segments[0].casefold() in _RESERVED_MOUNT_ROOTS:
+        raise ValueError(f"{source} mount_url uses a reserved URL path")
+    return value
 
 
 def _assign_paths(node, base_dir, endpoint_paths):

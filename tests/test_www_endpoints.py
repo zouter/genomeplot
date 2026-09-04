@@ -271,6 +271,13 @@ def test_endpoint_contributions_require_destination_and_collection_source_scope(
                             "placeholder": "Find a secret",
                         },
                     },
+                    {
+                        "id": "operator-page",
+                        "label": "Operator secret",
+                        "type": "page",
+                        "href": "operator/",
+                        "required_scope": "service.restart",
+                    },
                 ],
             },
         },
@@ -296,6 +303,7 @@ def test_endpoint_contributions_require_destination_and_collection_source_scope(
         tmp_path,
         access_verifier=FakeVerifier(),
         trusted_viewer_emails=["viewer@example.test"],
+        operator_emails=["operator@example.test"],
         endpoint_factories={"tests.scoped-navigation": Endpoint},
     )
     client = app.test_client()
@@ -304,11 +312,21 @@ def test_endpoint_contributions_require_destination_and_collection_source_scope(
     assert regular.get_json()["items"] == []
     assert b"Secret page" not in regular.data
     assert b"Secret collection" not in regular.data
+    assert b"Operator secret" not in regular.data
 
     trusted = client.get("/api/v1/navigation", headers=auth("viewer@example.test")).get_json()
     assert [item["id"] for item in trusted["items"][0]["children"]] == [
         "private-page",
         "private-collection",
+    ]
+    assert "Operator secret" not in json.dumps(trusted)
+    operator = client.get(
+        "/api/v1/navigation", headers=auth("operator@example.test")
+    ).get_json()
+    assert [item["id"] for item in operator["items"][0]["children"]] == [
+        "private-page",
+        "private-collection",
+        "operator-page",
     ]
 
 
@@ -463,6 +481,123 @@ def test_trusted_endpoint_factory_gets_context_scope_helpers_and_global_navigati
     assert observed["root_path"] == tmp_path / "www"
     assert observed["external_origin"] == "https://www.example.test"
     assert observed["restart_callback"] is restart
+
+
+def test_custom_endpoint_mount_drives_routes_navigation_scope_and_proxy_prefix(tmp_path):
+    www = tmp_path / "www"
+    www.mkdir()
+    (www / "navigation.json").write_text(
+        json.dumps(
+            {
+                "schema": "polyptich.www.navigation",
+                "schema_version": 1,
+                "title": "Iomix",
+                "items": [
+                    {"id": "dashboard", "label": "Dashboard", "type": "section"},
+                    {
+                        "id": "dashboard-items",
+                        "label": "Dashboard items",
+                        "type": "collection",
+                        "collection": {
+                            "type": "endpoint",
+                            "href": "/dashboard/api/items",
+                        },
+                    },
+                ],
+            }
+        )
+    )
+    write_manifest(
+        www / "internal-dashboard",
+        {
+            "schema": "polyptich.www.endpoint",
+            "schema_version": 1,
+            "endpoint_id": "tests.dashboard",
+            "mount_url": "/dashboard/",
+            "required_scope": "private.read",
+            "navigation": {
+                "parent_id": "dashboard",
+                "items": [
+                    {
+                        "id": "dashboard-home",
+                        "label": "Dashboard home",
+                        "type": "page",
+                        "href": ".",
+                    }
+                ],
+            },
+        },
+    )
+
+    class DashboardEndpoint:
+        def __init__(self, **_kwargs):
+            pass
+
+        def register(self, app, mount_url, endpoint_name):
+            app.add_url_rule(mount_url + "/", endpoint_name, lambda: "dashboard")
+            app.add_url_rule(mount_url + "/api/items", endpoint_name + "_items", lambda: "items")
+
+    app = server.create_app(
+        tmp_path,
+        access_verifier=FakeVerifier(),
+        trusted_viewer_emails=["viewer@example.test"],
+        endpoint_factories={"tests.dashboard": DashboardEndpoint},
+    )
+    client = app.test_client()
+
+    assert client.get("/dashboard/", headers=auth("reader@example.test")).status_code == 403
+    assert client.get("/dashboard/", headers=auth("viewer@example.test")).data == b"dashboard"
+    legacy = client.get(
+        "/endpoint/internal-dashboard/api/items?view=current",
+        headers=auth("viewer@example.test"),
+        environ_overrides={"SCRIPT_NAME": "/gateway"},
+    )
+    assert legacy.status_code == 308
+    assert legacy.headers["Location"] == "/gateway/dashboard/api/items?view=current"
+    redirect = client.get("/browse/internal-dashboard", headers=auth("viewer@example.test"))
+    assert redirect.headers["Location"] == "/dashboard/"
+    navigation = client.get(
+        "/api/v1/navigation",
+        headers=auth("viewer@example.test"),
+        environ_overrides={"SCRIPT_NAME": "/gateway"},
+    ).get_json()
+    assert navigation["items"][0]["children"][0]["href"] == "/gateway/dashboard/"
+    assert navigation["items"][1]["collection"]["href"] == "/gateway/dashboard/api/items"
+
+
+@pytest.mark.parametrize(
+    "mount_url",
+    ["/", "dashboard/", "/dashboard", "/api/dashboard/", "/dashboard/../admin/", "/dash%2Fboard/"],
+)
+def test_custom_endpoint_mount_rejects_noncanonical_reserved_or_unsafe_urls(tmp_path, mount_url):
+    write_manifest(
+        tmp_path / "www" / "dashboard",
+        {
+            "schema": "polyptich.www.endpoint",
+            "schema_version": 1,
+            "endpoint_id": "tests.dashboard",
+            "mount_url": mount_url,
+        },
+    )
+
+    with pytest.raises(ValueError, match="mount_url"):
+        server.create_app(tmp_path, access_verifier=FakeVerifier())
+
+
+def test_custom_endpoint_mount_rejects_conflicts_with_other_endpoints(tmp_path):
+    for directory, mount_url in [("one", "/dashboard/"), ("two", "/dashboard/admin/")]:
+        write_manifest(
+            tmp_path / "www" / directory,
+            {
+                "schema": "polyptich.www.endpoint",
+                "schema_version": 1,
+                "endpoint_id": "tests.dashboard",
+                "mount_url": mount_url,
+            },
+        )
+
+    with pytest.raises(ValueError, match="Endpoint mounts conflict"):
+        server.create_app(tmp_path, access_verifier=FakeVerifier())
 
 
 def test_unknown_endpoint_id_fails_startup_without_importing_a_handler(tmp_path):
